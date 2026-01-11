@@ -240,6 +240,7 @@ def main():
         n_embd=args.n_embd,
         n_layer=args.n_layer,
         n_head=args.n_head,
+        loss_type='ForCausalLMLoss',  # Suppress warning
     )
 
     base_model = GPT2LMHeadModel(gpt2_config)
@@ -273,7 +274,7 @@ def main():
     # Mixed precision training
     scaler = None
     if args.fp16 and torch.cuda.is_available():
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.amp.GradScaler('cuda')
         print("Using mixed precision training (FP16)")
         print()
 
