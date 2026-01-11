@@ -103,7 +103,7 @@ python train_jepa.py \
   --eval_steps 5000 \
   --log_interval 100 \
   --num_workers 8 \
-  --valid_split train \
+  --valid_split test \
   --fp16 \
   --seed 42
 
