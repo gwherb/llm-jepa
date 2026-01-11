@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2Model, GPT2LMHeadModel
 from typing import Optional, Tuple, Dict
+import os
 from .gpt2_jepa_config import JEPAConfig, GPT2JEPAConfig
 
 class GPT2WithJEPA(nn.Module):
@@ -292,13 +293,18 @@ def train_jepa(
     model: GPT2WithJEPA,
     train_dataloader,
     optimizer,
-    num_epochs: int,
+    num_epochs: Optional[int],
     device: torch.device,
     pred_token_id: int,
     first_relation_token_id: int,
+    max_steps: Optional[int] = None,
     eval_dataloader=None,
     scheduler=None,
     log_interval: int = 100,
+    save_steps: int = 10000,
+    save_step_dense: Optional[int] = None,
+    save_step_dense_interval: Optional[int] = None,
+    eval_steps: int = 5000,
     save_path: Optional[str] = None,
 ):
     """
@@ -309,6 +315,7 @@ def train_jepa(
     - Selective JEPA loss computation based on sample type
     - Combined NTP + JEPA loss optimization
     - Periodic evaluation and logging
+    - Step-based or epoch-based training
 
     Args:
         model: GPT2WithJEPA model instance
@@ -317,13 +324,18 @@ def train_jepa(
             - 'labels': (batch_size, seq_len) labels for NTP loss
             - 'type': List of 'train' or 'atomic' indicating JEPA eligibility
         optimizer: Optimizer instance
-        num_epochs: Number of training epochs
+        num_epochs: Number of training epochs (if max_steps not specified)
         device: Device to train on
         pred_token_id: Token ID for <PRED> token
         first_relation_token_id: Token ID of first relation (e.g., <r_0> = 16001)
+        max_steps: Maximum number of training steps (overrides num_epochs)
         eval_dataloader: Optional evaluation dataloader
         scheduler: Optional learning rate scheduler
         log_interval: Steps between logging
+        save_steps: Steps between checkpoint saves
+        save_step_dense: Save more frequently until this step
+        save_step_dense_interval: Interval for dense checkpoint saving
+        eval_steps: Steps between evaluation runs
         save_path: Optional path to save model checkpoints
 
     Returns:
@@ -332,9 +344,20 @@ def train_jepa(
     model.train()
     model.to(device)
 
+    # Determine training mode: step-based or epoch-based
+    if max_steps is not None:
+        training_mode = 'steps'
+        total_steps = max_steps
+        # Calculate approximate epochs for display
+        approx_epochs = max_steps / len(train_dataloader)
+    else:
+        training_mode = 'epochs'
+        total_steps = num_epochs * len(train_dataloader)
+        approx_epochs = num_epochs
+
     global_step = 0
     training_stats = {
-        'epoch': [],
+        'step': [],
         'total_loss': [],
         'ntp_loss': [],
         'jepa_loss': [],
@@ -343,15 +366,27 @@ def train_jepa(
     print("Starting LLM-JEPA Training...")
     print(f"Config: lambda={model.jepa_config.lambda_jepa}, gamma={model.jepa_config.gamma_ntp}, "
           f"k={model.jepa_config.k_pred_tok}, metric={model.jepa_config.distance_metric}")
-    print(f"Loss dropout: {model.jepa_config.loss_dropout}\n")
+    print(f"Loss dropout: {model.jepa_config.loss_dropout}")
+    print(f"Training mode: {training_mode} ({'max_steps=' + str(max_steps) if training_mode == 'steps' else 'num_epochs=' + str(num_epochs)})")
+    print(f"Approximate epochs: {approx_epochs:.1f}\n")
 
-    for epoch in range(num_epochs):
+    epoch = 0
+    finished = False
+
+    while not finished:
+        if training_mode == 'epochs' and epoch >= num_epochs:
+            break
         epoch_loss = 0.0
         epoch_ntp_loss = 0.0
         epoch_jepa_loss = 0.0
         num_batches = 0
 
         for step, batch in enumerate(train_dataloader):
+            # Check if we've reached max_steps
+            if training_mode == 'steps' and global_step >= max_steps:
+                finished = True
+                break
+
             # Move batch to device
             forward_input_ids = batch['input_ids'].to(device)
             forward_labels = batch['labels'].to(device)
@@ -403,48 +438,72 @@ def train_jepa(
             # Logging
             if global_step % log_interval == 0:
                 jepa_val = jepa_loss.item() if isinstance(jepa_loss, torch.Tensor) else jepa_loss
-                print(f"[Epoch {epoch+1}/{num_epochs}] Step {global_step} | "
+                current_epoch = epoch + 1
+                print(f"[Epoch {current_epoch}] Step {global_step} | "
                       f"Loss: {loss.item():.4f} | NTP: {ntp_loss.item():.4f} | JEPA: {jepa_val:.4f}")
+
+            # Evaluation
+            if eval_dataloader is not None and global_step > 0 and global_step % eval_steps == 0:
+                print(f"\nRunning evaluation at step {global_step}...")
+                eval_metrics = evaluate_jepa(
+                    model, eval_dataloader, device, pred_token_id, first_relation_token_id
+                )
+                print(f"Eval Loss: {eval_metrics['loss']:.4f} | "
+                      f"NTP: {eval_metrics['ntp_loss']:.4f} | "
+                      f"JEPA: {eval_metrics['jepa_loss']:.4f}\n")
+                model.train()
+
+            # Checkpoint saving with dense saving logic
+            if save_path is not None and global_step > 0:
+                should_save = False
+
+                # Dense saving: save every save_step_dense_interval until save_step_dense
+                if (save_step_dense is not None and
+                    save_step_dense_interval is not None and
+                    global_step <= save_step_dense):
+                    if global_step % save_step_dense_interval == 0:
+                        should_save = True
+
+                # Regular saving: save every save_steps after save_step_dense
+                elif global_step % save_steps == 0:
+                    should_save = True
+
+                if should_save:
+                    checkpoint_path = f"{save_path}/checkpoints/checkpoint_step_{global_step}.pt"
+                    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+                    torch.save({
+                        'step': global_step,
+                        'epoch': epoch + 1,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                        'jepa_config': model.jepa_config,
+                        'training_stats': training_stats,
+                    }, checkpoint_path)
+                    print(f"Saved checkpoint to {checkpoint_path}")
 
             global_step += 1
 
-        # Epoch summary
-        avg_loss = epoch_loss / num_batches
-        avg_ntp = epoch_ntp_loss / num_batches
-        avg_jepa = epoch_jepa_loss / num_batches
+        # Epoch summary (only if we completed batches)
+        if num_batches > 0:
+            avg_loss = epoch_loss / num_batches
+            avg_ntp = epoch_ntp_loss / num_batches
+            avg_jepa = epoch_jepa_loss / num_batches
 
-        training_stats['epoch'].append(epoch + 1)
-        training_stats['total_loss'].append(avg_loss)
-        training_stats['ntp_loss'].append(avg_ntp)
-        training_stats['jepa_loss'].append(avg_jepa)
+            training_stats['step'].append(global_step)
+            training_stats['total_loss'].append(avg_loss)
+            training_stats['ntp_loss'].append(avg_ntp)
+            training_stats['jepa_loss'].append(avg_jepa)
 
-        print(f"\n{'='*70}")
-        print(f"Epoch {epoch+1}/{num_epochs} Summary:")
-        print(f"  Train Loss: {avg_loss:.4f} | NTP: {avg_ntp:.4f} | JEPA: {avg_jepa:.4f}")
+            print(f"\n{'='*70}")
+            print(f"Epoch {epoch+1} Summary (Step {global_step}):")
+            print(f"  Train Loss: {avg_loss:.4f} | NTP: {avg_ntp:.4f} | JEPA: {avg_jepa:.4f}")
+            print(f"{'='*70}\n")
 
-        # Evaluation
-        if eval_dataloader is not None:
-            eval_metrics = evaluate_jepa(
-                model, eval_dataloader, device, pred_token_id, first_relation_token_id
-            )
-            print(f"  Eval Loss: {eval_metrics['loss']:.4f} | "
-                  f"NTP: {eval_metrics['ntp_loss']:.4f} | "
-                  f"JEPA: {eval_metrics['jepa_loss']:.4f}")
-
-        print(f"{'='*70}\n")
-
-        # Save checkpoint
-        if save_path is not None:
-            checkpoint_path = f"{save_path}/checkpoint_epoch_{epoch+1}.pt"
-            torch.save({
-                'epoch': epoch + 1,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'training_stats': training_stats,
-            }, checkpoint_path)
-            print(f"Saved checkpoint to {checkpoint_path}\n")
+        epoch += 1
 
     print("Training completed!")
+    print(f"Final step: {global_step}")
     return training_stats
 
 

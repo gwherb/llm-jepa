@@ -64,8 +64,10 @@ def parse_args():
                         help='Training batch size per GPU')
     parser.add_argument('--eval_batch_size', type=int, default=32,
                         help='Evaluation batch size')
-    parser.add_argument('--num_epochs', type=int, default=3,
-                        help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=None,
+                        help='Number of training epochs (if max_steps not specified)')
+    parser.add_argument('--max_steps', type=int, default=None,
+                        help='Maximum number of training steps (overrides num_epochs)')
     parser.add_argument('--learning_rate', type=float, default=5e-5,
                         help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=0.01,
@@ -78,6 +80,10 @@ def parse_args():
     # Checkpoint arguments
     parser.add_argument('--save_steps', type=int, default=10000,
                         help='Save checkpoint every N steps')
+    parser.add_argument('--save_step_dense', type=int, default=None,
+                        help='Save checkpoints more frequently until this step')
+    parser.add_argument('--save_step_dense_interval', type=int, default=None,
+                        help='Interval for dense checkpoint saving')
     parser.add_argument('--eval_steps', type=int, default=5000,
                         help='Evaluate every N steps')
     parser.add_argument('--log_interval', type=int, default=100,
@@ -287,19 +293,31 @@ def main():
         train_dataloader=train_dataloader,
         optimizer=optimizer,
         num_epochs=args.num_epochs,
+        max_steps=args.max_steps,
         device=device,
         pred_token_id=pred_token_id,
         first_relation_token_id=first_relation_token_id,
         eval_dataloader=valid_dataloader,
         scheduler=scheduler,
         log_interval=args.log_interval,
+        save_steps=args.save_steps,
+        save_step_dense=args.save_step_dense,
+        save_step_dense_interval=args.save_step_dense_interval,
+        eval_steps=args.eval_steps,
         save_path=args.output_dir,
     )
 
     # Save final model
+    if args.max_steps is not None:
+        final_step = args.max_steps
+        final_epoch = int(args.max_steps / len(train_dataloader))
+    else:
+        final_step = len(train_dataloader) * args.num_epochs
+        final_epoch = args.num_epochs
+
     final_checkpoint = save_checkpoint(
         model, optimizer, scheduler,
-        args.num_epochs, len(train_dataloader) * args.num_epochs,
+        final_epoch, final_step,
         args, args.output_dir, is_best=True
     )
 

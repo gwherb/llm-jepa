@@ -90,7 +90,7 @@ python train_jepa.py \
   --vocab_size 16015 \
   --batch_size $BATCH_SIZE \
   --eval_batch_size $BATCH_SIZE \
-  --num_epochs 3 \
+  --max_steps 3000000 \
   --learning_rate $LEARNING_RATE \
   --weight_decay $WEIGHT_DECAY \
   --lambda_jepa $LAMBDA_JEPA \
@@ -99,7 +99,9 @@ python train_jepa.py \
   --distance_metric $DISTANCE_METRIC \
   --loss_dropout $LOSS_DROPOUT \
   --use_jepa \
-  --save_steps 10000 \
+  --save_steps 50000 \
+  --save_step_dense 30000 \
+  --save_step_dense_interval 5000 \
   --eval_steps 5000 \
   --log_interval 100 \
   --num_workers 8 \
