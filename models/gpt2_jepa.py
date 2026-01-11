@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import GPT2Model, GPT2LMHeadModel
 from typing import Optional, Tuple, Dict
-from gpt2_jepa_config import JEPAConfig, GPT2JEPAConfig
+from .gpt2_jepa_config import JEPAConfig, GPT2JEPAConfig
 
 class GPT2WithJEPA(nn.Module):
 
