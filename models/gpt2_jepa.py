@@ -446,7 +446,8 @@ def train_jepa(
             if eval_dataloader is not None and global_step > 0 and global_step % eval_steps == 0:
                 print(f"\nRunning evaluation at step {global_step}...")
                 eval_metrics = evaluate_jepa(
-                    model, eval_dataloader, device, pred_token_id, first_relation_token_id
+                    model, eval_dataloader, device, pred_token_id, first_relation_token_id,
+                    compute_mrr=False  # Skip MRR during training for speed
                 )
                 print(f"Eval Loss: {eval_metrics['loss']:.4f} | "
                       f"NTP: {eval_metrics['ntp_loss']:.4f} | "
@@ -513,6 +514,7 @@ def evaluate_jepa(
     device: torch.device,
     pred_token_id: int,
     first_relation_token_id: int,
+    compute_mrr: bool = True,
 ):
     """
     Evaluate GPT2 with JEPA.
@@ -523,9 +525,10 @@ def evaluate_jepa(
         device: Device to evaluate on
         pred_token_id: Token ID for <PRED> token
         first_relation_token_id: Token ID of first relation
+        compute_mrr: Whether to compute MRR (expensive, skip during training)
 
     Returns:
-        Dictionary with evaluation metrics
+        Dictionary with evaluation metrics (including MRR if compute_mrr=True)
     """
     model.eval()
     total_loss = 0.0
@@ -533,20 +536,24 @@ def evaluate_jepa(
     total_jepa_loss = 0.0
     num_batches = 0
 
+    # MRR tracking
+    total_reciprocal_rank = 0.0
+    total_predictions = 0
+
     with torch.no_grad():
         for batch in eval_dataloader:
             forward_input_ids = batch['input_ids'].to(device)
             forward_labels = batch['labels'].to(device)
             batch_types = batch['type']
 
-            compute_jepa = torch.tensor(
+            compute_jepa_mask = torch.tensor(
                 [t == 'train' for t in batch_types],
                 dtype=torch.bool,
                 device=device
             )
 
             reverse_input_ids = None
-            if compute_jepa.any():
+            if compute_jepa_mask.any():
                 reverse_input_ids = model.create_reverse_sequence(
                     forward_input_ids,
                     first_relation_token_id
@@ -556,7 +563,7 @@ def evaluate_jepa(
                 forward_input_ids=forward_input_ids,
                 forward_labels=forward_labels,
                 reverse_input_ids=reverse_input_ids,
-                compute_jepa=compute_jepa,
+                compute_jepa=compute_jepa_mask,
                 pred_token_id=pred_token_id,
             )
 
@@ -565,10 +572,39 @@ def evaluate_jepa(
             total_jepa_loss += outputs['jepa_loss'].item() if isinstance(outputs['jepa_loss'], torch.Tensor) else outputs['jepa_loss']
             num_batches += 1
 
+            # Compute MRR only if requested (expensive operation)
+            if compute_mrr:
+                logits = outputs['logits']  # (batch_size, seq_len, vocab_size)
+                valid_mask = forward_labels != -100  # (batch_size, seq_len)
+
+                if valid_mask.any():
+                    batch_size, seq_len, vocab_size = logits.shape
+
+                    for b in range(batch_size):
+                        for pos in range(seq_len):
+                            if forward_labels[b, pos] != -100:
+                                # Get logits from previous position (next-token prediction)
+                                if pos > 0:
+                                    token_logits = logits[b, pos - 1, :]  # (vocab_size,)
+                                    target_token = forward_labels[b, pos].item()
+
+                                    # Compute rank of target token
+                                    sorted_indices = torch.argsort(token_logits, descending=True)
+                                    rank = (sorted_indices == target_token).nonzero(as_tuple=True)[0].item() + 1
+
+                                    total_reciprocal_rank += 1.0 / rank
+                                    total_predictions += 1
+
     model.train()
 
-    return {
+    results = {
         'loss': total_loss / num_batches,
         'ntp_loss': total_ntp_loss / num_batches,
         'jepa_loss': total_jepa_loss / num_batches,
     }
+
+    if compute_mrr:
+        results['mrr'] = total_reciprocal_rank / total_predictions if total_predictions > 0 else 0.0
+        results['num_predictions'] = total_predictions
+
+    return results

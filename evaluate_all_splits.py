@@ -117,6 +117,7 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
         print(f"  Total Loss: {metrics['loss']:.4f}")
         print(f"  NTP Loss:   {metrics['ntp_loss']:.4f}")
         print(f"  JEPA Loss:  {metrics['jepa_loss']:.4f}")
+        print(f"  MRR:        {metrics['mrr']:.4f}")
         print()
 
     # Summary comparison
@@ -124,11 +125,11 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
     print("SUMMARY")
     print("="*70)
     print()
-    print("Split       | Total Loss | NTP Loss  | JEPA Loss | Notes")
-    print("-" * 70)
-    print(f"train       | {results['train']['loss']:10.4f} | {results['train']['ntp_loss']:9.4f} | {results['train']['jepa_loss']:9.4f} | (overfitting check)")
-    print(f"atomic      | {results['atomic']['loss']:10.4f} | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['jepa_loss']:9.4f} | (one direction seen)")
-    print(f"test        | {results['test']['loss']:10.4f} | {results['test']['ntp_loss']:9.4f} | {results['test']['jepa_loss']:9.4f} | (REVERSAL CURSE TEST)")
+    print("Split       | Total Loss | NTP Loss  | JEPA Loss |    MRR    | Notes")
+    print("-" * 85)
+    print(f"train       | {results['train']['loss']:10.4f} | {results['train']['ntp_loss']:9.4f} | {results['train']['jepa_loss']:9.4f} | {results['train']['mrr']:9.4f} | (overfitting check)")
+    print(f"atomic      | {results['atomic']['loss']:10.4f} | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['jepa_loss']:9.4f} | {results['atomic']['mrr']:9.4f} | (one direction seen)")
+    print(f"test        | {results['test']['loss']:10.4f} | {results['test']['ntp_loss']:9.4f} | {results['test']['jepa_loss']:9.4f} | {results['test']['mrr']:9.4f} | (REVERSAL CURSE TEST)")
     print()
 
     # Analysis
@@ -160,12 +161,32 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
 
     # Reversal curse performance
     print(f"3. Reversal curse test (KEY METRIC):")
+    print(f"   Test set MRR: {results['test']['mrr']:.4f}")
     print(f"   Test set loss: {results['test']['loss']:.4f}")
     print(f"   This measures performance on NEVER-SEEN reverse directions")
-    if results['test']['loss'] < results['atomic']['loss']:
-        print(f"   ✓ Better than atomic baseline!")
+    if results['test']['mrr'] > results['atomic']['mrr']:
+        print(f"   ✓ Better MRR than atomic baseline!")
+    elif results['test']['mrr'] > 0.5:
+        print(f"   ✓ Good MRR (> 0.5)")
+    elif results['test']['mrr'] > 0.1:
+        print(f"   ⚠ Moderate MRR (0.1-0.5)")
     else:
-        print(f"   ⚠ Similar to atomic baseline")
+        print(f"   ✗ Low MRR (< 0.1) - reversal curse present")
+    print()
+
+    # MRR comparison
+    print(f"4. MRR comparison:")
+    print(f"   Train MRR:  {results['train']['mrr']:.4f} (upper bound)")
+    print(f"   Atomic MRR: {results['atomic']['mrr']:.4f} (one direction seen)")
+    print(f"   Test MRR:   {results['test']['mrr']:.4f} (reversal curse test)")
+    mrr_gap = results['train']['mrr'] - results['test']['mrr']
+    print(f"   Gap (Train - Test): {mrr_gap:.4f}")
+    if mrr_gap < 0.1:
+        print(f"   ✓ Minimal reversal curse effect!")
+    elif mrr_gap < 0.3:
+        print(f"   ⚠ Moderate reversal curse effect")
+    else:
+        print(f"   ✗ Strong reversal curse effect")
     print()
 
     print("="*70)
