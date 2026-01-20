@@ -37,9 +37,9 @@ echo ""
 # ============================================
 # CONFIGURE THESE PATHS
 # ============================================
-CHECKPOINT=/fs/scratch/PAA0201/herb.45/jepa_training/YOUR_JOB_DIR/best_model.pt
+CHECKPOINT=/fs/scratch/PAA0201/herb.45/jepa_training/inversionidcomb10.50000.30000_k1_cosine_job3254906/best_model.pt
 DATA_DIR=data/inversionidcomb10.50000.30000
-OUTPUT_FILE=/fs/scratch/PAA0201/herb.45/jepa_training/YOUR_JOB_DIR/eval_results.json
+OUTPUT_FILE=/fs/scratch/PAA0201/herb.45/jepa_training/inversionidcomb10.50000.30000_k1_cosine_job3254906/eval_results.json
 BATCH_SIZE=32
 # ============================================
 
