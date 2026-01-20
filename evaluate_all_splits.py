@@ -40,7 +40,7 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
 
     # Load checkpoint
     print("Loading checkpoint...")
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
     # Get config from checkpoint
     jepa_config = checkpoint.get('jepa_config')
