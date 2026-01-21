@@ -542,6 +542,7 @@ def evaluate_jepa(
     total_reciprocal_rank = 0.0
     total_reciprocal_rank_token1 = 0.0
     total_reciprocal_rank_token2 = 0.0
+    total_joint_log_likelihood = 0.0  # Joint log likelihood of entity
     total_samples = 0
     joint_correct = 0  # Both tokens rank 1
 
@@ -551,6 +552,7 @@ def evaluate_jepa(
         per_layer_rr = {layer: 0.0 for layer in range(n_layers)}
         per_layer_rr_token1 = {layer: 0.0 for layer in range(n_layers)}
         per_layer_rr_token2 = {layer: 0.0 for layer in range(n_layers)}
+        per_layer_joint_ll = {layer: 0.0 for layer in range(n_layers)}
         per_layer_joint_correct = {layer: 0 for layer in range(n_layers)}
 
     with torch.no_grad():
@@ -618,6 +620,12 @@ def evaluate_jepa(
                         if rank1 == 1 and rank2 == 1:
                             joint_correct += 1
 
+                        # Joint log likelihood: log P(tok1) + log P(tok2|tok1)
+                        log_probs1 = torch.log_softmax(token1_logits, dim=-1)
+                        log_probs2 = torch.log_softmax(token2_logits, dim=-1)
+                        joint_ll = log_probs1[target1].item() + log_probs2[target2].item()
+                        total_joint_log_likelihood += joint_ll
+
                         total_samples += 1
 
                 # Per-layer analysis
@@ -664,6 +672,12 @@ def evaluate_jepa(
                                 if rank1 == 1 and rank2 == 1:
                                     per_layer_joint_correct[layer_idx] += 1
 
+                                # Joint log likelihood for this layer
+                                log_p1 = torch.log_softmax(t1_logits, dim=-1)
+                                log_p2 = torch.log_softmax(t2_logits, dim=-1)
+                                joint_ll = log_p1[target1].item() + log_p2[target2].item()
+                                per_layer_joint_ll[layer_idx] += joint_ll
+
     model.train()
 
     results = {
@@ -676,6 +690,7 @@ def evaluate_jepa(
         results['mrr'] = total_reciprocal_rank / total_samples
         results['mrr_token1'] = total_reciprocal_rank_token1 / total_samples
         results['mrr_token2'] = total_reciprocal_rank_token2 / total_samples
+        results['joint_log_likelihood'] = total_joint_log_likelihood / total_samples
         results['joint_accuracy'] = joint_correct / total_samples
         results['num_samples'] = total_samples
 
@@ -683,6 +698,7 @@ def evaluate_jepa(
             results['per_layer_mrr'] = {layer: per_layer_rr[layer] / total_samples for layer in range(n_layers)}
             results['per_layer_mrr_token1'] = {layer: per_layer_rr_token1[layer] / total_samples for layer in range(n_layers)}
             results['per_layer_mrr_token2'] = {layer: per_layer_rr_token2[layer] / total_samples for layer in range(n_layers)}
+            results['per_layer_joint_ll'] = {layer: per_layer_joint_ll[layer] / total_samples for layer in range(n_layers)}
             results['per_layer_joint_accuracy'] = {layer: per_layer_joint_correct[layer] / total_samples for layer in range(n_layers)}
 
     return results
