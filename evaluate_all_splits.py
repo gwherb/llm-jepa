@@ -17,7 +17,7 @@ from models.gpt2_jepa_config import JEPAConfig
 from models.gpt2_jepa_dataloader import create_dataloaders, get_special_token_ids
 
 
-def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
+def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None, per_layer=False):
     """
     Evaluate model on all three validation splits.
 
@@ -26,6 +26,7 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
         data_dir: Directory containing data files
         batch_size: Batch size for evaluation
         device: Device to use (defaults to cuda if available)
+        per_layer: Whether to compute per-layer MRR analysis (expensive)
     """
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -101,6 +102,8 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
         )
 
         print(f"Evaluating {len(eval_dataloader)} batches...")
+        if per_layer:
+            print("(Computing per-layer MRR - this may take longer)")
 
         # Evaluate
         metrics = evaluate_jepa(
@@ -109,27 +112,32 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
             device=device,
             pred_token_id=pred_token_id,
             first_relation_token_id=first_relation_token_id,
+            compute_mrr=True,
+            compute_per_layer=per_layer,
         )
 
         results[split_name] = metrics
 
         print(f"\nResults for '{split_name}' split:")
-        print(f"  Total Loss: {metrics['loss']:.4f}")
-        print(f"  NTP Loss:   {metrics['ntp_loss']:.4f}")
-        print(f"  JEPA Loss:  {metrics['jepa_loss']:.4f}")
-        print(f"  MRR:        {metrics['mrr']:.4f}")
+        print(f"  Total Loss:      {metrics['loss']:.4f}")
+        print(f"  NTP Loss:        {metrics['ntp_loss']:.4f}")
+        print(f"  JEPA Loss:       {metrics['jepa_loss']:.4f}")
+        print(f"  MRR (avg):       {metrics['mrr']:.4f}")
+        print(f"  MRR (token 1):   {metrics['mrr_token1']:.4f}")
+        print(f"  MRR (token 2):   {metrics['mrr_token2']:.4f}")
+        print(f"  Joint Accuracy:  {metrics['joint_accuracy']:.4f}")
         print()
 
     # Summary comparison
-    print("="*70)
+    print("="*90)
     print("SUMMARY")
-    print("="*70)
+    print("="*90)
     print()
-    print("Split       | Total Loss | NTP Loss  | JEPA Loss |    MRR    | Notes")
-    print("-" * 85)
-    print(f"train       | {results['train']['loss']:10.4f} | {results['train']['ntp_loss']:9.4f} | {results['train']['jepa_loss']:9.4f} | {results['train']['mrr']:9.4f} | (overfitting check)")
-    print(f"atomic      | {results['atomic']['loss']:10.4f} | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['jepa_loss']:9.4f} | {results['atomic']['mrr']:9.4f} | (one direction seen)")
-    print(f"test        | {results['test']['loss']:10.4f} | {results['test']['ntp_loss']:9.4f} | {results['test']['jepa_loss']:9.4f} | {results['test']['mrr']:9.4f} | (REVERSAL CURSE TEST)")
+    print("Split       | NTP Loss  | MRR (avg) | MRR (tok1) | MRR (tok2) | Joint Acc | Notes")
+    print("-" * 90)
+    print(f"train       | {results['train']['ntp_loss']:9.4f} | {results['train']['mrr']:9.4f} | {results['train']['mrr_token1']:10.4f} | {results['train']['mrr_token2']:10.4f} | {results['train']['joint_accuracy']:9.4f} | (overfitting check)")
+    print(f"atomic      | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['mrr']:9.4f} | {results['atomic']['mrr_token1']:10.4f} | {results['atomic']['mrr_token2']:10.4f} | {results['atomic']['joint_accuracy']:9.4f} | (one direction seen)")
+    print(f"test        | {results['test']['ntp_loss']:9.4f} | {results['test']['mrr']:9.4f} | {results['test']['mrr_token1']:10.4f} | {results['test']['mrr_token2']:10.4f} | {results['test']['joint_accuracy']:9.4f} | (REVERSAL CURSE)")
     print()
 
     # Analysis
@@ -189,7 +197,31 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None):
         print(f"   ✗ Strong reversal curse effect")
     print()
 
-    print("="*70)
+    # Joint accuracy comparison
+    print(f"5. Joint Accuracy (both tokens correct):")
+    print(f"   Train:  {results['train']['joint_accuracy']:.4f}")
+    print(f"   Atomic: {results['atomic']['joint_accuracy']:.4f}")
+    print(f"   Test:   {results['test']['joint_accuracy']:.4f}")
+    print()
+
+    # Per-layer analysis if available
+    if 'per_layer_mrr' in results['test']:
+        print("="*90)
+        print("PER-LAYER MRR ANALYSIS (Test Split)")
+        print("="*90)
+        print()
+        print("Layer | MRR (avg) | MRR (tok1) | MRR (tok2) | Joint Acc")
+        print("-" * 55)
+        n_layers = len(results['test']['per_layer_mrr'])
+        for layer in range(n_layers):
+            mrr = results['test']['per_layer_mrr'][layer]
+            mrr_t1 = results['test']['per_layer_mrr_token1'][layer]
+            mrr_t2 = results['test']['per_layer_mrr_token2'][layer]
+            joint = results['test']['per_layer_joint_accuracy'][layer]
+            print(f"  {layer:2d}  | {mrr:9.4f} | {mrr_t1:10.4f} | {mrr_t2:10.4f} | {joint:9.4f}")
+        print()
+
+    print("="*90)
 
     return results
 
@@ -204,6 +236,8 @@ def main():
                         help='Batch size for evaluation')
     parser.add_argument('--output', type=str, default=None,
                         help='Optional path to save results JSON')
+    parser.add_argument('--per_layer', action='store_true',
+                        help='Compute per-layer MRR analysis (slower)')
 
     args = parser.parse_args()
 
@@ -211,6 +245,7 @@ def main():
         checkpoint_path=args.checkpoint,
         data_dir=args.data_dir,
         batch_size=args.batch_size,
+        per_layer=args.per_layer,
     )
 
     # Save results if requested

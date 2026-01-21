@@ -515,6 +515,7 @@ def evaluate_jepa(
     pred_token_id: int,
     first_relation_token_id: int,
     compute_mrr: bool = True,
+    compute_per_layer: bool = False,
 ):
     """
     Evaluate GPT2 with JEPA.
@@ -526,6 +527,7 @@ def evaluate_jepa(
         pred_token_id: Token ID for <PRED> token
         first_relation_token_id: Token ID of first relation
         compute_mrr: Whether to compute MRR (expensive, skip during training)
+        compute_per_layer: Whether to compute per-layer MRR (very expensive)
 
     Returns:
         Dictionary with evaluation metrics (including MRR if compute_mrr=True)
@@ -536,9 +538,20 @@ def evaluate_jepa(
     total_jepa_loss = 0.0
     num_batches = 0
 
-    # MRR tracking
+    # MRR tracking (final layer)
     total_reciprocal_rank = 0.0
-    total_predictions = 0
+    total_reciprocal_rank_token1 = 0.0
+    total_reciprocal_rank_token2 = 0.0
+    total_samples = 0
+    joint_correct = 0  # Both tokens rank 1
+
+    # Per-layer tracking
+    n_layers = model.config.n_layer
+    if compute_per_layer:
+        per_layer_rr = {layer: 0.0 for layer in range(n_layers)}
+        per_layer_rr_token1 = {layer: 0.0 for layer in range(n_layers)}
+        per_layer_rr_token2 = {layer: 0.0 for layer in range(n_layers)}
+        per_layer_joint_correct = {layer: 0 for layer in range(n_layers)}
 
     with torch.no_grad():
         for batch in eval_dataloader:
@@ -575,25 +588,81 @@ def evaluate_jepa(
             # Compute MRR only if requested (expensive operation)
             if compute_mrr:
                 logits = outputs['logits']  # (batch_size, seq_len, vocab_size)
-                valid_mask = forward_labels != -100  # (batch_size, seq_len)
+                batch_size = forward_input_ids.shape[0]
 
-                if valid_mask.any():
-                    batch_size, seq_len, vocab_size = logits.shape
+                # For each sample, compute metrics for both target tokens
+                # Labels format: [-100, -100, -100, -100, e2_first, e2_last]
+                # Positions 4 and 5 have valid labels
+                for b in range(batch_size):
+                    # Token 1 (e2_first) - predicted from position 3
+                    if forward_labels[b, 4] != -100:
+                        token1_logits = logits[b, 3, :]
+                        target1 = forward_labels[b, 4].item()
+                        sorted1 = torch.argsort(token1_logits, descending=True)
+                        rank1 = (sorted1 == target1).nonzero(as_tuple=True)[0].item() + 1
+                        rr1 = 1.0 / rank1
+                        total_reciprocal_rank_token1 += rr1
 
-                    for b in range(batch_size):
-                        for pos in range(seq_len):
-                            if forward_labels[b, pos] != -100:
-                                # Get logits from previous position (next-token prediction)
-                                if pos > 0:
-                                    token_logits = logits[b, pos - 1, :]  # (vocab_size,)
-                                    target_token = forward_labels[b, pos].item()
+                        # Token 2 (e2_last) - predicted from position 4
+                        token2_logits = logits[b, 4, :]
+                        target2 = forward_labels[b, 5].item()
+                        sorted2 = torch.argsort(token2_logits, descending=True)
+                        rank2 = (sorted2 == target2).nonzero(as_tuple=True)[0].item() + 1
+                        rr2 = 1.0 / rank2
+                        total_reciprocal_rank_token2 += rr2
 
-                                    # Compute rank of target token
-                                    sorted_indices = torch.argsort(token_logits, descending=True)
-                                    rank = (sorted_indices == target_token).nonzero(as_tuple=True)[0].item() + 1
+                        # Averaged MRR
+                        total_reciprocal_rank += (rr1 + rr2) / 2
 
-                                    total_reciprocal_rank += 1.0 / rank
-                                    total_predictions += 1
+                        # Joint accuracy (both rank 1)
+                        if rank1 == 1 and rank2 == 1:
+                            joint_correct += 1
+
+                        total_samples += 1
+
+                # Per-layer analysis
+                if compute_per_layer:
+                    # Get hidden states from all layers
+                    layer_outputs = model.base_model.transformer(
+                        input_ids=forward_input_ids,
+                        output_hidden_states=True,
+                    )
+                    all_hidden_states = layer_outputs.hidden_states  # Tuple of (batch, seq, hidden)
+
+                    # Get the LM head
+                    lm_head = model.base_model.lm_head
+
+                    # For each layer (skip embedding layer at index 0)
+                    for layer_idx in range(n_layers):
+                        hidden = all_hidden_states[layer_idx + 1]  # +1 to skip embedding
+
+                        # Project to vocab
+                        layer_logits = lm_head(hidden)  # (batch, seq, vocab)
+
+                        for b in range(batch_size):
+                            if forward_labels[b, 4] != -100:
+                                # Token 1
+                                t1_logits = layer_logits[b, 3, :]
+                                target1 = forward_labels[b, 4].item()
+                                sorted1 = torch.argsort(t1_logits, descending=True)
+                                rank1 = (sorted1 == target1).nonzero(as_tuple=True)[0].item() + 1
+                                rr1 = 1.0 / rank1
+                                per_layer_rr_token1[layer_idx] += rr1
+
+                                # Token 2
+                                t2_logits = layer_logits[b, 4, :]
+                                target2 = forward_labels[b, 5].item()
+                                sorted2 = torch.argsort(t2_logits, descending=True)
+                                rank2 = (sorted2 == target2).nonzero(as_tuple=True)[0].item() + 1
+                                rr2 = 1.0 / rank2
+                                per_layer_rr_token2[layer_idx] += rr2
+
+                                # Average
+                                per_layer_rr[layer_idx] += (rr1 + rr2) / 2
+
+                                # Joint
+                                if rank1 == 1 and rank2 == 1:
+                                    per_layer_joint_correct[layer_idx] += 1
 
     model.train()
 
@@ -603,8 +672,17 @@ def evaluate_jepa(
         'jepa_loss': total_jepa_loss / num_batches,
     }
 
-    if compute_mrr:
-        results['mrr'] = total_reciprocal_rank / total_predictions if total_predictions > 0 else 0.0
-        results['num_predictions'] = total_predictions
+    if compute_mrr and total_samples > 0:
+        results['mrr'] = total_reciprocal_rank / total_samples
+        results['mrr_token1'] = total_reciprocal_rank_token1 / total_samples
+        results['mrr_token2'] = total_reciprocal_rank_token2 / total_samples
+        results['joint_accuracy'] = joint_correct / total_samples
+        results['num_samples'] = total_samples
+
+        if compute_per_layer:
+            results['per_layer_mrr'] = {layer: per_layer_rr[layer] / total_samples for layer in range(n_layers)}
+            results['per_layer_mrr_token1'] = {layer: per_layer_rr_token1[layer] / total_samples for layer in range(n_layers)}
+            results['per_layer_mrr_token2'] = {layer: per_layer_rr_token2[layer] / total_samples for layer in range(n_layers)}
+            results['per_layer_joint_accuracy'] = {layer: per_layer_joint_correct[layer] / total_samples for layer in range(n_layers)}
 
     return results

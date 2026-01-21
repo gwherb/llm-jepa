@@ -61,16 +61,31 @@ fi
 mkdir -p $(dirname $OUTPUT_FILE)
 mkdir -p /fs/scratch/PAA0201/herb.45/logs
 
+# Set to true to compute per-layer MRR analysis (slower but more detailed)
+PER_LAYER=true
+
 # Run evaluation
 echo "Starting evaluation on all splits (train, atomic, test)..."
-echo "This will compute MRR which may take a few minutes per split."
+echo "Computing: MRR (avg), MRR (token1), MRR (token2), Joint Accuracy"
+if [ "$PER_LAYER" = true ]; then
+    echo "Per-layer analysis: ENABLED (this will take longer)"
+fi
 echo ""
 
-python evaluate_all_splits.py \
-    --checkpoint $CHECKPOINT \
-    --data_dir $DATA_DIR \
-    --batch_size $BATCH_SIZE \
-    --output $OUTPUT_FILE
+if [ "$PER_LAYER" = true ]; then
+    python evaluate_all_splits.py \
+        --checkpoint $CHECKPOINT \
+        --data_dir $DATA_DIR \
+        --batch_size $BATCH_SIZE \
+        --output $OUTPUT_FILE \
+        --per_layer
+else
+    python evaluate_all_splits.py \
+        --checkpoint $CHECKPOINT \
+        --data_dir $DATA_DIR \
+        --batch_size $BATCH_SIZE \
+        --output $OUTPUT_FILE
+fi
 
 EXIT_CODE=$?
 
