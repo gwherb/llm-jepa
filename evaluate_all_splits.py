@@ -125,20 +125,21 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None, p
         print(f"  MRR (avg):       {metrics['mrr']:.4f}")
         print(f"  MRR (token 1):   {metrics['mrr_token1']:.4f}")
         print(f"  MRR (token 2):   {metrics['mrr_token2']:.4f}")
-        print(f"  Joint Log-Lik:   {metrics['joint_log_likelihood']:.4f}")
+        print(f"  MRR (joint):     {metrics['mrr_joint']:.4f}")
+        print(f"  Joint NLL:       {metrics['joint_nll']:.4f}")
         print(f"  Joint Accuracy:  {metrics['joint_accuracy']:.4f}")
         print()
 
     # Summary comparison
-    print("="*115)
+    print("="*120)
     print("SUMMARY")
-    print("="*115)
+    print("="*120)
     print()
-    print("Split       | NTP Loss  | MRR (avg) | MRR (tok1) | MRR (tok2) | Joint LL | Joint Acc | Notes")
-    print("-" * 115)
-    print(f"train       | {results['train']['ntp_loss']:9.4f} | {results['train']['mrr']:9.4f} | {results['train']['mrr_token1']:10.4f} | {results['train']['mrr_token2']:10.4f} | {results['train']['joint_log_likelihood']:8.4f} | {results['train']['joint_accuracy']:9.4f} | (overfitting)")
-    print(f"atomic      | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['mrr']:9.4f} | {results['atomic']['mrr_token1']:10.4f} | {results['atomic']['mrr_token2']:10.4f} | {results['atomic']['joint_log_likelihood']:8.4f} | {results['atomic']['joint_accuracy']:9.4f} | (one dir)")
-    print(f"test        | {results['test']['ntp_loss']:9.4f} | {results['test']['mrr']:9.4f} | {results['test']['mrr_token1']:10.4f} | {results['test']['mrr_token2']:10.4f} | {results['test']['joint_log_likelihood']:8.4f} | {results['test']['joint_accuracy']:9.4f} | (REVERSAL)")
+    print("Split       | NTP Loss  | MRR (avg) | MRR (tok1) | MRR (tok2) | MRR (joint) | Joint NLL | Joint Acc | Notes")
+    print("-" * 120)
+    print(f"train       | {results['train']['ntp_loss']:9.4f} | {results['train']['mrr']:9.4f} | {results['train']['mrr_token1']:10.4f} | {results['train']['mrr_token2']:10.4f} | {results['train']['mrr_joint']:11.4f} | {results['train']['joint_nll']:9.4f} | {results['train']['joint_accuracy']:9.4f} | (overfitting)")
+    print(f"atomic      | {results['atomic']['ntp_loss']:9.4f} | {results['atomic']['mrr']:9.4f} | {results['atomic']['mrr_token1']:10.4f} | {results['atomic']['mrr_token2']:10.4f} | {results['atomic']['mrr_joint']:11.4f} | {results['atomic']['joint_nll']:9.4f} | {results['atomic']['joint_accuracy']:9.4f} | (one dir)")
+    print(f"test        | {results['test']['ntp_loss']:9.4f} | {results['test']['mrr']:9.4f} | {results['test']['mrr_token1']:10.4f} | {results['test']['mrr_token2']:10.4f} | {results['test']['mrr_joint']:11.4f} | {results['test']['joint_nll']:9.4f} | {results['test']['joint_accuracy']:9.4f} | (REVERSAL)")
     print()
 
     # Analysis
@@ -205,30 +206,39 @@ def evaluate_all_splits(checkpoint_path, data_dir, batch_size=32, device=None, p
     print(f"   Test:   {results['test']['joint_accuracy']:.4f}")
     print()
 
-    # Joint log likelihood comparison
-    print(f"6. Joint Log-Likelihood (log P(tok1) + log P(tok2|tok1)):")
-    print(f"   Train:  {results['train']['joint_log_likelihood']:.4f}")
-    print(f"   Atomic: {results['atomic']['joint_log_likelihood']:.4f}")
-    print(f"   Test:   {results['test']['joint_log_likelihood']:.4f}")
-    print(f"   (Higher is better; 0 = perfect, more negative = less confident)")
+    # Joint NLL comparison
+    print(f"6. Joint NLL (-log P(tok1) - log P(tok2|tok1)):")
+    print(f"   Train:  {results['train']['joint_nll']:.4f}")
+    print(f"   Atomic: {results['atomic']['joint_nll']:.4f}")
+    print(f"   Test:   {results['test']['joint_nll']:.4f}")
+    print(f"   (Lower is better; 0 = perfect)")
+    print()
+
+    # Joint MRR comparison
+    print(f"7. Joint MRR (entity-level ranking):")
+    print(f"   Train:  {results['train']['mrr_joint']:.4f}")
+    print(f"   Atomic: {results['atomic']['mrr_joint']:.4f}")
+    print(f"   Test:   {results['test']['mrr_joint']:.4f}")
+    print(f"   (Ranks entity among all {results['train']['num_samples']} possible token pairs)")
     print()
 
     # Per-layer analysis if available
     if 'per_layer_mrr' in results['test']:
-        print("="*80)
+        print("="*95)
         print("PER-LAYER ANALYSIS (Test Split)")
-        print("="*80)
+        print("="*95)
         print()
-        print("Layer | MRR (avg) | MRR (tok1) | MRR (tok2) | Joint LL | Joint Acc")
-        print("-" * 70)
+        print("Layer | MRR (avg) | MRR (tok1) | MRR (tok2) | MRR (joint) | Joint NLL | Joint Acc")
+        print("-" * 95)
         n_layers = len(results['test']['per_layer_mrr'])
         for layer in range(n_layers):
             mrr = results['test']['per_layer_mrr'][layer]
             mrr_t1 = results['test']['per_layer_mrr_token1'][layer]
             mrr_t2 = results['test']['per_layer_mrr_token2'][layer]
-            joint_ll = results['test']['per_layer_joint_ll'][layer]
+            mrr_joint = results['test']['per_layer_mrr_joint'][layer]
+            joint_nll = results['test']['per_layer_joint_nll'][layer]
             joint = results['test']['per_layer_joint_accuracy'][layer]
-            print(f"  {layer:2d}  | {mrr:9.4f} | {mrr_t1:10.4f} | {mrr_t2:10.4f} | {joint_ll:8.4f} | {joint:9.4f}")
+            print(f"  {layer:2d}  | {mrr:9.4f} | {mrr_t1:10.4f} | {mrr_t2:10.4f} | {mrr_joint:11.4f} | {joint_nll:9.4f} | {joint:9.4f}")
         print()
 
     print("="*90)
